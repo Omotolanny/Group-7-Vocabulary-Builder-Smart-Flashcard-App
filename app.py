@@ -57,7 +57,7 @@ class Word:
         self.antonyms = antonyms
         self.simple_explanation = simple_explanation
         self.memory_trick = memory_trick
-        self.ai_error = ai_error  # filled only if Gemini failed
+        self.ai_error = ai_error  
 
     def to_dict(self) -> dict:
         return {
@@ -69,6 +69,7 @@ class Word:
             "antonyms": self.antonyms,
             "simple_explanation": self.simple_explanation,
             "memory_trick": self.memory_trick,
+            "ai_error": self.ai_error,
         }
 
 
@@ -152,7 +153,7 @@ class DictionaryClient:
             return json.loads(raw)
         except Exception as e:
             logger.error("Gemini connection error: %s", e)
-            # Return a safe fallback dictionary so the app doesn't crash
+            
             return {
                 "definition": "Definition unavailable due to network connection reset.",
                 "phonetic": "/word/",
@@ -226,7 +227,7 @@ Return JSON with exactly these keys:
         ai_data = {}
 
         try:
-            # Try fetching from the free online dictionary API first
+            
             response = requests.get(f"{self.FREE_DICT_URL}{word}", timeout=5)
             if response.status_code == 200:
                 data = response.json()[0]
@@ -250,7 +251,6 @@ Return JSON with exactly these keys:
                 raise Exception("Dictionary API returned non-200")
                 
         except Exception:
-            # Fallback to Gemini if network/DNS blocks the external dictionary API
             fallback = self.generate_fallback_definition(word)
             definition = fallback.get("definition", "Definition generated via AI fallback.")
             phonetic = fallback.get("phonetic", phonetic)
@@ -289,7 +289,7 @@ Return JSON with exactly these keys:
     def __init__(self):
         self.ai = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
-    # ---------- Regex helpers ----------
+    # Regex helpers 
     @staticmethod
     def validate_and_clean_input(word: str) -> str:
         """Regex: validate and sanitize the user's word."""
@@ -307,7 +307,7 @@ Return JSON with exactly these keys:
         text = re.sub(r"\s+", " ", text)
         return text.strip()
 
-    # ---------- Gemini ----------
+    # Gemini 
     def _ask_gemini_json(self, prompt: str) -> dict:
         if self.ai is None:
             raise RuntimeError("GEMINI_API_KEY is missing. Add it to your .env file.")
@@ -369,7 +369,7 @@ Return JSON like: {{"wrong_definitions": ["...", "..."]}}
             logger.error("Distractor generation failed: %s", e)
         return random.sample(self.GENERIC_WRONG, count)
 
-    # ---------- Dictionary API ----------
+    # Dictionary API 
     def fetch_word(self, raw_word: str) -> Word:
         word = self.validate_and_clean_input(raw_word)
 
@@ -409,7 +409,7 @@ Return JSON like: {{"wrong_definitions": ["...", "..."]}}
 
         ai = self.fetch_ai_content(word, definition)
 
-        # If Gemini gave no examples, use the dictionary's own example (if any)
+        
         examples = ai["examples"]
         if not examples:
             for meaning in meanings:
