@@ -106,6 +106,21 @@ class Flashcard:
         return datetime.fromisoformat(self.next_review_date) <= datetime.now()
 
 
+
+def friendly_ai_error(error) -> str:
+    """Turns technical Gemini errors into short messages users can understand."""
+    text = str(error)
+    if "429" in text or "RESOURCE_EXHAUSTED" in text:
+        return "The AI has reached its daily free limit. Please try again later."
+    if "503" in text or "UNAVAILABLE" in text:
+        return "The AI service is busy right now. Please try again in a moment."
+    if "404" in text or "NOT_FOUND" in text:
+        return "The AI model is not available. Please check the model setting."
+    if "API key" in text or "401" in text or "403" in text or "PERMISSION_DENIED" in text:
+        return "The AI service could not be accessed. Please check the API key."
+    if "GEMINI_API_KEY is missing" in text:
+        return "The AI service is not set up yet. Please add the API key."
+    return "The AI explanation could not be generated. Please try again."
 class DictionaryClient:
     """Handles the dictionary API and Gemini AI generation with offline fallback."""
 
@@ -576,7 +591,7 @@ def page_search():
     st.write(word.definition)
 
     if word.ai_error:
-        st.warning(f"AI explanation and memory trick are unavailable: {word.ai_error[:250]}")
+        st.warning(f"AI explanation and memory trick are unavailable: {friendly_ai_error(word.ai_error)}")
     else:
         col1, col2 = st.columns(2)
         col1.info(f"💡 **Simple explanation**\n\n{word.simple_explanation}")
