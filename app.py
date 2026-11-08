@@ -26,7 +26,7 @@ logger = logging.getLogger("vocab")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 
-GEMINI_FALLBACKS = ["gemini-3.7-flash", "gemini-3.6-flash"]
+GEMINI_FALLBACKS = ["gemini-flash-latest", "gemini-3.7-flash", "gemini-3.6-flash"]
 MODELS_TO_TRY = [GEMINI_MODEL] + [model for model in GEMINI_FALLBACKS if model != GEMINI_MODEL]
 
 
@@ -133,7 +133,13 @@ class DictionaryClient:
     ]
 
     def __init__(self):
-        self.ai = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+        self.ai = genai.Client(
+            api_key=GEMINI_API_KEY,
+            http_options=types.HttpOptions(
+                timeout=10000,
+                retry_options=types.HttpRetryOptions(attempts=1),
+            ),
+        ) if GEMINI_API_KEY else None
 
     @staticmethod
     def validate_and_clean_input(word: str) -> str:
@@ -243,7 +249,7 @@ Return JSON with exactly these keys:
 
         try:
             
-            response = requests.get(f"{self.FREE_DICT_URL}{word}", timeout=5)
+            response = requests.get(f"{self.FREE_DICT_URL}{word}", timeout=(5, 10))
             if response.status_code == 200:
                 data = response.json()[0]
                 phonetic = data.get("phonetic") or phonetic
@@ -263,8 +269,10 @@ Return JSON with exactly these keys:
                     "ai_error": ai["error"]
                 }
             else:
-                raise Exception("Dictionary API returned non-200")
-                
+                if response.status_code == 404:
+                    raise LookupError(f"The word '{word}' was not found in the dictionary.")
+                raise ConnectionError("The dictionary service returned an error")
+                # Exception("Dictionary API returned non-200")
         except Exception:
             fallback = self.generate_fallback_definition(word)
             definition = fallback.get("definition", "Definition generated via AI fallback.")
@@ -302,7 +310,13 @@ Return JSON with exactly these keys:
     ]
 
     def __init__(self):
-        self.ai = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+        self.ai = genai.Client(
+            api_key=GEMINI_API_KEY,
+            http_options=types.HttpOptions(
+                timeout=10000,
+                retry_options=types.HttpRetryOptions(attempts=1),
+            ),
+        ) if GEMINI_API_KEY else None
 
     # Regex helpers 
     @staticmethod
@@ -326,17 +340,37 @@ Return JSON with exactly these keys:
     def _ask_gemini_json(self, prompt: str) -> dict:
         if self.ai is None:
             raise RuntimeError("GEMINI_API_KEY is missing. Add it to your .env file.")
-        response = self.ai.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                temperature=0.8,
-            ),
+        retryable_errors = (
+            "429",
+            "RESOURCE_EXHAUSTED",
+            "503",
+            "UNAVAILABLE",
+            "404",
+            "NOT_FOUND",
         )
-        raw = response.text.strip()
-        raw = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE).strip()
-        return json.loads(raw)
+        for index, model in enumerate(MODELS_TO_TRY):
+            try:
+                response = self.ai.models.generate_content(
+                    model=model,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        temperature=0.8,
+                    ),
+                )
+                raw = response.text.strip()
+                raw = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE).strip()
+                return json.loads(raw)
+            except Exception as e:
+                if index == len(MODELS_TO_TRY) - 1 or not any(
+                    marker in str(e) for marker in retryable_errors
+                ):
+                    raise
+                logger.warning(
+                    "Gemini model %s is unavailable; trying the next configured model: %s",
+                    model,
+                    e,
+                )
 
     def fetch_ai_content(self, word: str, definition: str) -> dict:
         prompt = f"""You are an expert vocabulary tutor.
@@ -389,9 +423,22 @@ Return JSON like: {{"wrong_definitions": ["...", "..."]}}
         word = self.validate_and_clean_input(raw_word)
 
         try:
-            response = requests.get(f"{self.FREE_DICT_URL}{word}", timeout=10)
+            response = requests.get(f"{self.FREE_DICT_URL}{word}", timeout=(5, 10))
+        except requests.exceptions.Timeout as e:
+            logger.warning("Dictionary lookup timed out for '%s': %s", word, e)
+            raise ConnectionError(
+                "The dictionary lookup timed out. Check your internet connection and try again."
+            ) from e
+        except requests.exceptions.ConnectionError as e:
+            logger.warning("Could not connect to the dictionary service for '%s': %s", word, e)
+            raise ConnectionError(
+                "Could not connect to the dictionary service. Check your internet connection and try again."
+            ) from e
         except requests.exceptions.RequestException as e:
-            raise ConnectionError(f"Could not reach the dictionary service: {e}")
+            logger.error("Dictionary request failed for '%s': %s", word, e)
+            raise ConnectionError(
+                "The dictionary request failed. Please try again."
+            ) from e
 
         if response.status_code == 404:
             raise LookupError(f"The word '{word}' was not found in the dictionary.")
